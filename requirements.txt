@@ -1,0 +1,17 @@
+# Web framework
+fastapi==0.115.0
+uvicorn[standard]==0.30.1
+
+# LangGraph ecosystem — must all move together
+langgraph>=1.0.0
+langgraph-checkpoint-mongodb==0.4.0
+
+# LLM providers
+langchain-openai>=0.3.0
+
+# Database — motor 3.7+ aligns pymongo requirement with langgraph-checkpoint-mongodb
+motor==3.7.0
+pymongo==4.12.0
+
+# Config
+python-dotenv==1.0.1
