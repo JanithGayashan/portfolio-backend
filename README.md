@@ -1,5 +1,3 @@
-# portfolio-backend
-Centralized FastAPI backend and LangGraph agentic workflows serving real-time AI inference for my engineering portfolio.
 ---
 title: Portfolio Backend
 emoji: 🚀
@@ -9,5 +7,7 @@ sdk: docker
 pinned: false
 ---
 
-# My AI Portfolio Backend
+# portfolio-backend
+Centralized FastAPI backend and LangGraph agentic workflows serving real-time AI inference for my engineering portfolio.
+
 This is the FastAPI backend serving my Decision Tree ML models.
