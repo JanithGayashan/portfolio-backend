@@ -6,7 +6,7 @@ import os
 
 router = APIRouter()
 
-# Load models globally so they don't reload on every single API request
+# This is use for Load models globally so they don't reload on every single API request
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MODEL_PATH = os.path.join(BASE_DIR, "ml_models", "loan_decision_tree_model.pkl")
 SCALER_PATH = os.path.join(BASE_DIR, "ml_models", "loan_scaler.pkl")

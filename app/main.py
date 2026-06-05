@@ -20,4 +20,4 @@ async def health_check():
     return {"status": "online", "message": "Backend is active. Terminal listening."}
 
 # 4. NOW we can attach the Machine Learning router!
-app.include_router(loan.router, prefix="/api/v1/loan", tags=["Machine Learning"])
+app.include_router(loan.router, prefix="/api/v1/loan", tags=["Loan approval prediction"])
