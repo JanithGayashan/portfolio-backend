@@ -2,10 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
+# 1. LOAD THE ENVIRONMENT VARIABLES FIRST
+load_dotenv()
+
+# 2. THEN IMPORT YOUR MODULES
 from app.api.v1 import loan
 from app.api.v1 import chat
-
-load_dotenv()
 
 app = FastAPI(title="Janith's Portfolio API")
 

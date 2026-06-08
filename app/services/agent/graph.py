@@ -1,5 +1,6 @@
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
+
 from langgraph.checkpoint.mongodb import MongoDBSaver
 
 from app.db.database import get_client
@@ -43,15 +44,9 @@ def build_graph():
     workflow.add_conditional_edges("transactional_agent", route_after_agent, {"tools": "tools", END: END})
     workflow.add_edge("tools", "supervisor")
 
-    # 4. Attach Database Memory asynchronously
-    memory = MongoDBSaver(client=get_client())
+    # 4. Attach Database Memory
+    # INITIALIZATION UPDATED HERE (Passing db_name explicitly)
+    memory = MongoDBSaver(get_client(), db_name="portfolio_chatbot_db")
     return workflow.compile(checkpointer=memory)
 
-# Lazy initialize portfolio graph to avoid requiring MongoDB at import time
-_portfolio_graph = None
-
-def get_portfolio_graph():
-    global _portfolio_graph
-    if _portfolio_graph is None:
-        _portfolio_graph = build_graph()
-    return _portfolio_graph
+portfolio_graph = build_graph()
