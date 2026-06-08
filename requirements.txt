@@ -22,3 +22,11 @@ numpy==1.26.4
 pandas==2.2.2
 faiss-cpu==1.8.0
 langchain-community>=0.0.38
+
+# Vector Database (Pinecone)
+pinecone-client==5.0.1
+langchain-pinecone==0.2.13
+
+# Local Embeddings Engine (BAAI/HuggingFace)
+langchain-huggingface==1.2.2
+sentence-transformers>=5.2.0

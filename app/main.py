@@ -1,11 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1 import loan
+from dotenv import load_dotenv
 
-# 1. Initialize the FastAPI application first!
+from app.api.v1 import loan
+from app.api.v1 import chat
+
+load_dotenv()
+
 app = FastAPI(title="Janith's Portfolio API")
 
-# 2. Configure CORS so your Next.js frontend is allowed to connect
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -14,10 +17,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 3. A simple health check route
 @app.get("/")
 async def health_check():
     return {"status": "online", "message": "Backend is active. Terminal listening."}
 
-# 4. NOW we can attach the Machine Learning router!
-app.include_router(loan.router, prefix="/api/v1/loan", tags=["Loan approval prediction"])
+# Mount your routers
+app.include_router(loan.router, prefix="/api/v1/loan", tags=["Machine Learning"])
+app.include_router(chat.router, prefix="/api/v1/chat", tags=["AI Chatbot"])

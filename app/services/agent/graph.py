@@ -1,12 +1,17 @@
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.mongodb.aio import AsyncMongoDBSaver
+from langgraph.checkpoint.mongodb import MongoDBSaver
 
 from app.db.database import get_client
 from .state import AgentState
 from .nodes import supervisor_node, conversational_agent, rag_agent, transactional_agent
-# Notice it says .tools.portfolio instead of .tools.portfolio_tools
 from .tools.portfolio import navigate_website, retrieve_portfolio_info, execute_loan_prediction
+
+def route_after_agent(state: AgentState):
+    last_message = state["messages"][-1]
+    if last_message.tool_calls:
+        return "tools"
+    return END
 
 def build_graph():
     workflow = StateGraph(AgentState)
@@ -20,14 +25,33 @@ def build_graph():
     tools = [navigate_website, retrieve_portfolio_info, execute_loan_prediction]
     workflow.add_node("tools", ToolNode(tools))
 
-    # 2. Add Routing Edges (Exactly as mapped out previously)
+    # 2. Wire the Router
     workflow.add_edge(START, "supervisor")
-    # ... (Include the conditional edges here) ...
+    workflow.add_conditional_edges(
+        "supervisor",
+        lambda state: state["next_agent"],
+        {
+            "conversational_agent": "conversational_agent",
+            "rag_agent": "rag_agent",
+            "transactional_agent": "transactional_agent"
+        }
+    )
+
+    # 3. Wire the Tool Callbacks
+    workflow.add_conditional_edges("conversational_agent", route_after_agent, {"tools": "tools", END: END})
+    workflow.add_conditional_edges("rag_agent", route_after_agent, {"tools": "tools", END: END})
+    workflow.add_conditional_edges("transactional_agent", route_after_agent, {"tools": "tools", END: END})
     workflow.add_edge("tools", "supervisor")
 
-    # 3. Compile with Database Memory
-    memory = AsyncMongoDBSaver(get_client())
+    # 4. Attach Database Memory asynchronously
+    memory = MongoDBSaver(client=get_client())
     return workflow.compile(checkpointer=memory)
 
-# Export the compiled graph to be used in your API router
-portfolio_graph = build_graph()
+# Lazy initialize portfolio graph to avoid requiring MongoDB at import time
+_portfolio_graph = None
+
+def get_portfolio_graph():
+    global _portfolio_graph
+    if _portfolio_graph is None:
+        _portfolio_graph = build_graph()
+    return _portfolio_graph
