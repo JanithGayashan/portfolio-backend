@@ -2,10 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-# 1. LOAD THE ENVIRONMENT VARIABLES FIRST
 load_dotenv()
 
-# 2. THEN IMPORT YOUR MODULES
 from app.api.v1 import loan
 from app.api.v1 import chat
 
@@ -23,6 +21,6 @@ app.add_middleware(
 async def health_check():
     return {"status": "online", "message": "Backend is active. Terminal listening."}
 
-# Mount your routers
+# Mount routers
 app.include_router(loan.router, prefix="/api/v1/loan", tags=["Machine Learning"])
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["AI Chatbot"])
