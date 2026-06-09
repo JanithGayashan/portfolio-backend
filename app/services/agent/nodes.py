@@ -41,7 +41,7 @@ async def supervisor_node(state: AgentState):
         
         for msg in previous_messages:
             # Check who sent it (User or AI)
-            role = "USER" if msg.type == "user" else ("AI" if msg.type == "ai" else "TOOL")
+            role = "USER" if msg.type == "human" else ("AI" if msg.type == "ai" else "TOOL")
             
             # Truncate the text so it doesn't flood the terminal if it's super long
             content = msg.content
@@ -53,8 +53,13 @@ async def supervisor_node(state: AgentState):
         logger.info("🕒 HISTORY TRACE: 0 previous messages. This is a brand new conversation.")
     # ------------------------------------
 
-    # Now proceed with the standard routing logic
-    messages = [SystemMessage(content=SUPERVISOR_PROMPT)] + state["messages"]
+    # --- 🛠️ THE BUG FIX IS HERE ---
+    # Isolate ONLY the newest message so the router doesn't get confused by the past
+    last_user_message = state["messages"][-1]
+
+    # Combine the system prompt with ONLY the newest message
+    messages = [SystemMessage(content=SUPERVISOR_PROMPT), last_user_message]
+    
     decision = await supervisor_llm.ainvoke(messages)
     
     logger.info(f"🔀 ROUTING: Supervisor decided to route to -> [{decision.next_node}]")
