@@ -1,14 +1,13 @@
 import os
 import logging
-from typing import Literal
+from typing import Literal, List, Optional
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, ToolMessage, HumanMessage
-
+from langchain_core.messages import SystemMessage, ToolMessage, HumanMessage, AIMessage
 
 from .state import AgentState
-from .prompts import SUPERVISOR_PROMPT, CONVERSATIONAL_PROMPT, RAG_PROMPT, TRANSACTIONAL_PROMPT, OUT_OF_BOUNDS_PROMPT
-from .tools.portfolio import navigate_website, retrieve_portfolio_info, execute_loan_prediction
+from .prompts import PLANNER_PROMPT, REPLANNER_PROMPT, CONVERSATIONAL_PROMPT, RAG_PROMPT, TRANSACTIONAL_PROMPT
+from .tools.portfolio import retrieve_portfolio_info, execute_loan_prediction
 
 # Configure the terminal logger
 logging.basicConfig(
@@ -19,20 +18,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1)
-
 rag_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0).bind_tools([retrieve_portfolio_info])
 
-class RouteSchema(BaseModel):
-    next_node: Literal["rag_agent", "transactional_agent", "conversational_agent", "OUT_OF_BOUNDS"] = Field(...)
+# --- PYDANTIC SCHEMAS ---
+class Plan(BaseModel):
+    steps: List[str] = Field(description="Sequential steps to complete the user's request.")
 
-supervisor_llm = llm.with_structured_output(RouteSchema)
+class FinalResponseSchema(BaseModel):
+    reply: str = Field(description="The final synthesized conversational reply to the user.")
+    ui_action: Literal["NONE", "PROMPT_USER", "AUTO_NAVIGATE"] = Field(...)
+    target_route: Optional[str] = Field(description="e.g., '/projects', '/experience', '/education', '/contact'")
 
-async def supervisor_node(state: AgentState):
-    logger.info("🟢 ACTIVATED: Supervisor Node -> Analyzing user intent...")
+class Act(BaseModel):
+    action: Literal["update_plan", "finish"] = Field(...)
+    final_response: Optional[FinalResponseSchema] = Field(None, description="Provide ONLY if action is 'finish'")
+    plan: List[str] = Field(default=[], description="Provide remaining steps ONLY if action is 'update_plan'")
+
+# --- THE MANAGERS ---
+async def planner_node(state: AgentState):
+    logger.info("🧠 ACTIVATED: Planner Node -> Formulating execution plan...")
     
-    # --- 💾 MONGODB LOGGING TRACE ---
-    total_messages = len(state["messages"])
-    logger.info(f"💾 MONGODB MEMORY: Loaded {total_messages} total message(s) from database.")
+    # --- MONGODB LOGGING TRACE (Unchanged) ---
+    total_messages = len(state.get("messages", []))
+    logger.info(f"💾 DATABASE MEMORY: Loaded {total_messages} total message(s) from state.")
     
     if total_messages > 1:
         logger.info("🕒 HISTORY TRACE (Previous 3 messages):")
@@ -46,86 +54,84 @@ async def supervisor_node(state: AgentState):
     else:
         logger.info("🕒 HISTORY TRACE: 0 previous messages. This is a brand new conversation.")
     # ------------------------------------
+
+    planner_agent = llm.with_structured_output(Plan)
     
-    # 1. Grab the exact string the user just typed from your new state variable
-    user_input = state.get("current_user_input", "")
-
-    # 2. THE HANDOFF INTERCEPT: If the RAG agent failed and left a guardrail message,
-    # instantly pass it to OUT_OF_BOUNDS without even asking the LLM.
-    last_message = state["messages"][-1]
-    if last_message.type == "tool" and "GUARDRAIL_TRIGGERED" in last_message.content:
-        logger.info("🔀 ROUTING: RAG Guardrail detected. Manually passing work to -> [OUT_OF_BOUNDS]")
-        return {"next_agent": "OUT_OF_BOUNDS"}
-
-    # 3. Combine the system prompt with ONLY the exact user input
-    messages = [SystemMessage(content=SUPERVISOR_PROMPT), HumanMessage(content=user_input)]
+    messages = [SystemMessage(content=PLANNER_PROMPT), HumanMessage(content=state["current_user_input"])]
+    plan_output = await planner_agent.ainvoke(messages)
     
-    decision = await supervisor_llm.ainvoke(messages)
+    logger.info(f"📋 PLAN CREATED: {plan_output.steps}")
     
-    logger.info(f"🔀 ROUTING: Supervisor decided to route to -> [{decision.next_node}]")
-    return {"next_agent": decision.next_node}
+    # THE FIX: Add "final_response": {} here to wipe out the previous turn's memory!
+    return {
+        "plan": plan_output.steps, 
+        "past_steps": [], 
+        "final_response": {} 
+    }
 
-async def conversational_agent(state: AgentState):
-    logger.info("🟢 ACTIVATED: Conversational Agent -> Processing small talk/navigation...")
-    agent = llm.bind_tools([navigate_website])
-    response = await agent.ainvoke([SystemMessage(content=CONVERSATIONAL_PROMPT)] + state["messages"])
-    return {"messages": [response]}
+async def replanner_node(state: AgentState):
+    logger.info("🔄 ACTIVATED: Re-Planner Node -> Evaluating progress...")
+    replanner_agent = llm.with_structured_output(Act)
+    
+    history_str = "\n".join(f"Task: {task}\nResult: {result}" for task, result in state.get("past_steps", []))
+    prompt = f"{REPLANNER_PROMPT}\n\nCurrent Plan:\n{state.get('plan', [])}\n\nPast Steps:\n{history_str}"
+    
+    action = await replanner_agent.ainvoke([SystemMessage(content=prompt)])
+    
+    if action.action == "finish":
+        logger.info(f"✅ PLAN COMPLETE: UI Action -> [{action.final_response.ui_action}] Target -> [{action.final_response.target_route}]")
+        return {
+            "final_response": action.final_response.model_dump(), 
+            "messages": [AIMessage(content=action.final_response.reply)]
+        }
+    else:
+        logger.info(f"⏳ PLAN UPDATED: Remaining steps -> {action.plan}")
+        return {"plan": action.plan}
 
+# --- THE WORKERS ---
 async def rag_agent(state: AgentState):
-    logger.info("🟢 ACTIVATED: RAG Agent -> Preparing to search portfolio context...")
+    task = state["plan"][0] if state.get("plan") else "General portfolio search"
+    logger.info(f"🟢 WORKER: RAG Agent executing task: '{task}'")
     
-    # Extract the exact string the user typed from the state
-    user_input = state.get("current_user_input", "")
-    
-    # 1. Ask the RAG LLM to analyze the request WITH the RAG System Prompt
-    messages = [SystemMessage(content=RAG_PROMPT)] + state["messages"]
+    messages = [SystemMessage(content=RAG_PROMPT), HumanMessage(content=task)]
     response = await rag_llm.ainvoke(messages)
     
-    # 2. Check if the LLM decided to use the Pinecone tool
+    result_text = response.content
+    
+    # Manual tool execution to preserve detailed logging
     if hasattr(response, 'tool_calls') and len(response.tool_calls) > 0:
         tool_call = response.tool_calls[0]
         
         if tool_call["name"] == "retrieve_portfolio_info":
-            logger.info(f"🛠️ RAG Agent executing tool: {tool_call['name']}")
-            
-            # 1. Extract the optimized query generated by the LLM
             optimized_query = tool_call["args"]["query"]
             logger.info(f"🔎 OPTIMIZED SEARCH: LLM translated input to: '{optimized_query}'")
             
-            # 2. Execute Pinecone using the optimized query!
             tool_output = retrieve_portfolio_info.invoke(optimized_query)
             
-            # 3. Create the official ToolMessage so OpenAI doesn't crash!
             tool_message = ToolMessage(
-                content=str(tool_output),
-                tool_call_id=tool_call["id"],
+                content=str(tool_output), 
+                tool_call_id=tool_call["id"], 
                 name=tool_call["name"]
             )
             
-            # 4. The "Short-Circuit" Guardrail
-            if "GUARDRAIL_TRIGGERED" in tool_output:
-                logger.warning("⚠️ RAG INTERCEPT: No Pinecone data found. Short-circuiting LLM and returning to Supervisor.")
-                return {"messages": [response, tool_message]}
-            
-            # 5. If data WAS found, call the RAG LLM one more time to generate the final portfolio answer
-            logger.info("✅ Pinecone data found. Calling RAG LLM to generate final response...")
-            final_messages = state["messages"] + [response, tool_message]
-            final_response = await rag_llm.ainvoke(final_messages)
-            
-            return {"messages": [response, tool_message, final_response]}
+            logger.info("✅ Pinecone search complete. Summarizing findings for the Re-Planner...")
+            final_response = await rag_llm.ainvoke(messages + [response, tool_message])
+            result_text = final_response.content
 
-    # If no tools were called at all, just return the AI's normal response
-    return {"messages": [response]}
+    return {"past_steps": [(task, result_text)]}
 
 async def transactional_agent(state: AgentState):
-    logger.info("🟢 ACTIVATED: Transactional Agent -> Preparing loan prediction model...")
+    task = state["plan"][0] if state.get("plan") else "Run loan prediction"
+    logger.info(f"🟢 WORKER: Transactional Agent executing task: '{task}'")
+    
     agent = llm.bind_tools([execute_loan_prediction])
-    response = await agent.ainvoke([SystemMessage(content=TRANSACTIONAL_PROMPT)] + state["messages"])
-    return {"messages": [response]}
+    response = await agent.ainvoke([SystemMessage(content=TRANSACTIONAL_PROMPT), HumanMessage(content=task)])
+    
+    return {"past_steps": [(task, response.content)]}
 
-async def out_of_bounds_node(state: AgentState):
-    """Dynamically handles greetings or off-topic rejections."""
-    logger.info("🛑 ACTIVATED: Out of Bounds Node -> Handling rejected off-topic query or greeting...")
-    messages = [SystemMessage(content=OUT_OF_BOUNDS_PROMPT)] + state["messages"]
-    response = await llm.ainvoke(messages)
-    return {"messages": [response]}
+async def conversational_agent(state: AgentState):
+    task = state["plan"][0] if state.get("plan") else "Respond to small talk"
+    logger.info(f"🟢 WORKER: Conversational Agent executing task: '{task}'")
+    
+    response = await llm.ainvoke([SystemMessage(content=CONVERSATIONAL_PROMPT), HumanMessage(content=task)])
+    return {"past_steps": [(task, response.content)]}
